@@ -23,6 +23,13 @@ class UserReportResponse(BaseModel):
     cause: str
     report_date: str
 
+class TflStatusResponse(BaseModel):
+    id: int
+    line_name: str
+    status: str
+    reason: str | None
+    timestamp: str
+
 # --- DATABASE HELPER ---
 def get_db_connection():
     conn = sqlite3.connect("transport_api.db")
@@ -92,3 +99,18 @@ def delete_report(report_id: int):
     conn.commit()
     conn.close()
     return None
+
+# 5. READ (Live TfL Status)
+@app.get("/live-status", response_model=List[TflStatusResponse])
+def get_live_status():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tfl_live_status ORDER BY line_name ASC")
+    statuses = cursor.fetchall()
+    conn.close()
+    
+    if not statuses:
+        # Proper error handling if someone hits the endpoint before running the import script
+        raise HTTPException(status_code=404, detail="No live data found. Please run the import script.")
+        
+    return [dict(row) for row in statuses]
