@@ -30,6 +30,11 @@ class TflStatusResponse(BaseModel):
     reason: str | None
     timestamp: str
 
+class DiscrepancyResponse(BaseModel):
+    line_name: str
+    official_status: str
+    user_report_count: int
+    total_reported_delay_minutes: int
 # --- DATABASE HELPER ---
 def get_db_connection():
     conn = sqlite3.connect("transport_api.db")
@@ -114,3 +119,36 @@ def get_live_status():
         raise HTTPException(status_code=404, detail="No live data found. Please run the import script.")
         
     return [dict(row) for row in statuses]
+
+# 6. ADVANCED ANALYTICS (Find Unacknowledged Disruptions)
+@app.get("/analytics/discrepancies", response_model=List[DiscrepancyResponse])
+def get_discrepancies():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # This SQL query merges the two tables where the line_name matches.
+    # It only flags lines where TfL says "Good Service" BUT users have reported delays.
+    query = """
+        SELECT 
+            t.line_name,
+            t.status AS official_status,
+            COUNT(u.id) AS user_report_count,
+            SUM(u.delay_minutes) AS total_reported_delay_minutes
+        FROM tfl_live_status t
+        JOIN user_reports u ON t.line_name = u.line_name
+        WHERE t.status = 'Good Service'
+        GROUP BY t.line_name
+    """
+    
+    cursor.execute(query)
+    discrepancies = cursor.fetchall()
+    conn.close()
+    
+    if not discrepancies:
+        # If the tables match up perfectly, we return a 404 indicating no discrepancies found
+        raise HTTPException(
+            status_code=404, 
+            detail="No discrepancies found. TfL data matches user reports."
+        )
+        
+    return [dict(row) for row in discrepancies]
