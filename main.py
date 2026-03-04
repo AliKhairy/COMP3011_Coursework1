@@ -7,6 +7,10 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from import_tfl_data import fetch_tfl_data
+import time # Add this to your imports at the top if you don't have it
+
+# --- GLOBAL APP STATE ---
+API_START_TIME = time.time()
 
 # --- PROFESSIONAL LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +44,14 @@ app = FastAPI(
 )
 
 # --- PYDANTIC MODELS (Data Validation) ---
+
+class SystemHealth(BaseModel):
+    api_uptime_seconds: float  # Replaced the static 'api_status'
+    database_status: str
+    background_worker_status: str
+    last_tfl_sync: str | None
+
+
 class UserReportCreate(BaseModel):
     line_name: str
     delay_minutes: int
@@ -323,28 +335,52 @@ def get_network_uptime():
 
 # --- INFRASTRUCTURE & VELOCITY ---
 
-# 8. SYSTEM HEALTH CHECK
+# 8. SYSTEM HEALTH CHECK (Deep Diagnostic & Uptime)
 @app.get("/health", response_model=SystemHealth)
 def get_health_check():
+    # Calculate exact API uptime dynamically
+    current_uptime = round(time.time() - API_START_TIME, 2)
+    
+    health_report = {
+        "api_uptime_seconds": current_uptime,
+        "database_status": "unknown",
+        "background_worker_status": "unknown",
+        "last_tfl_sync": None
+    }
+    
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Verify database connection and background worker status
+        # True DB Ping
+        cursor.execute("SELECT 1")
+        health_report["database_status"] = "connected"
+        
+        # Background Worker Diagnostic
         cursor.execute("SELECT MAX(timestamp) as last_sync FROM tfl_live_status")
         result = cursor.fetchone()
         conn.close()
         
-        last_sync = result["last_sync"] if result and result["last_sync"] else "Never"
-        
-        return {
-            "status": "online",
-            "database": "connected",
-            "last_tfl_sync": last_sync
-        }
+        if result and result["last_sync"]:
+            last_sync_str = result["last_sync"]
+            health_report["last_tfl_sync"] = last_sync_str
+            
+            last_sync_time = datetime.strptime(last_sync_str, "%Y-%m-%d %H:%M:%S")
+            time_since_sync = (datetime.now() - last_sync_time).total_seconds()
+            
+            if time_since_sync > 600:
+                health_report["background_worker_status"] = "degraded (stale data)"
+            else:
+                health_report["background_worker_status"] = "healthy"
+        else:
+            health_report["background_worker_status"] = "waiting for initial sync"
+            
     except Exception as e:
-        # If the database is locked or corrupted, this immediately alerts the examiner
-        raise HTTPException(status_code=503, detail=f"System Degraded: {e}")
+        health_report["database_status"] = "disconnected or locked"
+        health_report["background_worker_status"] = "unreachable"
+        raise HTTPException(status_code=503, detail=health_report)
+
+    return health_report
 
 # 9. DELAY VELOCITY (Trending Analysis)
 @app.get("/analytics/velocity/{line_name}", response_model=DelayVelocity)
