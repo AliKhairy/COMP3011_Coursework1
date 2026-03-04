@@ -6,7 +6,6 @@ from datetime import datetime
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-
 from import_tfl_data import fetch_tfl_data
 
 # --- PROFESSIONAL LOGGING SETUP ---
@@ -55,9 +54,9 @@ class UserReportResponse(BaseModel):
 
 class UserMetrics(BaseModel):
     total_reports: int
-    total_minutes_lost: int
-    average_delay_minutes: float
-    worst_single_delay: int
+    crowd_consensus_delay: float
+    peak_delay: int
+    buffer_time_index: float
 
 class TflStatusResponse(BaseModel):
     id: int
@@ -84,13 +83,30 @@ class ReliabilityScore(BaseModel):
 class DelayPattern(BaseModel):
     issue_type: str
     incident_count: int
-    total_minutes_lost: int
     average_delay_minutes: float
+    peak_delay_minutes: int
 
 class TemporalSummary(BaseModel):
     hour_of_day: str
     total_incidents: int
 
+class LineUptime(BaseModel):
+    line_name: str
+    uptime_percentage: float
+    official_disruption_snapshots: int  # Replaces the fragile minutes calculation
+    current_status: str
+
+class SystemHealth(BaseModel):
+    status: str
+    database: str
+    last_tfl_sync: str | None
+
+class DelayVelocity(BaseModel):
+    line_name: str
+    current_hour_delay_minutes: int
+    previous_hour_delay_minutes: int
+    trend: str
+    velocity_assessment: str
 
 # --- DATABASE HELPER ---
 def get_db_connection():
@@ -120,12 +136,23 @@ def create_report(report: UserReportCreate):
     
     return {**report.model_dump(), "id": new_id, "report_date": report_date}
 
-# 2. READ
+# 2. READ (Paginated & Filtered)
 @app.get("/reports", response_model=List[UserReportResponse])
-def get_reports():
+def get_reports(skip: int = 0, limit: int = 50, line_name: str | None = None):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM user_reports ORDER BY report_date DESC")
+    
+    if line_name:
+        cursor.execute(
+            "SELECT * FROM user_reports WHERE line_name = ? COLLATE NOCASE ORDER BY report_date DESC LIMIT ? OFFSET ?",
+            (line_name, limit, skip)
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM user_reports ORDER BY report_date DESC LIMIT ? OFFSET ?",
+            (limit, skip)
+        )
+        
     reports = cursor.fetchall()
     conn.close()
     return [dict(row) for row in reports]
@@ -183,16 +210,29 @@ def get_discrepancies():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # We replace the flawed SUM with AVG and MAX to find the true delay envelope
+    # ADVANCED SQL: CTEs and Time-Bounding
+    # 1. Finds the absolute latest TfL status for each line
+    # 2. Grabs only user reports from the last 2 hours
+    # 3. Joins them to find current, unacknowledged disruptions
     query = """
+        WITH LatestTfL AS (
+            SELECT line_name, status 
+            FROM tfl_live_status 
+            WHERE id IN (SELECT MAX(id) FROM tfl_live_status GROUP BY line_name)
+        ),
+        RecentReports AS (
+            SELECT line_name, delay_minutes, id
+            FROM user_reports
+            WHERE report_date >= datetime('now', 'localtime', '-2 hours')
+        )
         SELECT 
             t.line_name,
             t.status AS official_status,
             COUNT(u.id) AS corroborating_reports,
             AVG(u.delay_minutes) AS avg_delay,
             MAX(u.delay_minutes) AS max_delay
-        FROM tfl_live_status t
-        JOIN user_reports u ON t.line_name = u.line_name
+        FROM LatestTfL t
+        JOIN RecentReports u ON t.line_name = u.line_name
         WHERE t.status = 'Good Service'
         GROUP BY t.line_name
     """
@@ -230,16 +270,149 @@ def get_discrepancies():
         
     return formatted_results
 
+# 7. HISTORICAL ANALYTICS (24-Hour Network Uptime)
+@app.get("/analytics/uptime", response_model=List[LineUptime])
+def get_network_uptime():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Mathematically sound counting. No magic numbers or assumptions about polling frequency.
+    query = """
+        SELECT 
+            line_name,
+            COUNT(id) as total_checks,
+            SUM(CASE WHEN status = 'Good Service' THEN 1 ELSE 0 END) as good_checks,
+            SUM(CASE WHEN status != 'Good Service' THEN 1 ELSE 0 END) as bad_checks
+        FROM tfl_live_status
+        WHERE timestamp >= datetime('now', 'localtime', '-24 hours')
+        GROUP BY line_name
+        ORDER BY uptime_percentage ASC
+    """
+    
+    cursor.execute(query)
+    history = cursor.fetchall()
+    
+    cursor.execute("""
+        SELECT line_name, status 
+        FROM tfl_live_status 
+        WHERE id IN (SELECT MAX(id) FROM tfl_live_status GROUP BY line_name)
+    """)
+    latest_statuses = {row["line_name"]: row["status"] for row in cursor.fetchall()}
+    conn.close()
+
+    if not history:
+        raise HTTPException(status_code=404, detail="Not enough historical data collected yet. Let the background worker run.")
+
+    results = []
+    for row in history:
+        total = row["total_checks"]
+        good = row["good_checks"]
+        bad = row["bad_checks"]
+        
+        # Pure percentage, immune to polling frequency changes
+        uptime_pct = round((good / total) * 100, 1) if total > 0 else 0.0
+        
+        results.append({
+            "line_name": row["line_name"],
+            "uptime_percentage": uptime_pct,
+            "official_disruption_snapshots": bad,
+            "current_status": latest_statuses.get(row["line_name"], "Unknown")
+        })
+
+    return results
+
+# --- INFRASTRUCTURE & VELOCITY ---
+
+# 8. SYSTEM HEALTH CHECK
+@app.get("/health", response_model=SystemHealth)
+def get_health_check():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Verify database connection and background worker status
+        cursor.execute("SELECT MAX(timestamp) as last_sync FROM tfl_live_status")
+        result = cursor.fetchone()
+        conn.close()
+        
+        last_sync = result["last_sync"] if result and result["last_sync"] else "Never"
+        
+        return {
+            "status": "online",
+            "database": "connected",
+            "last_tfl_sync": last_sync
+        }
+    except Exception as e:
+        # If the database is locked or corrupted, this immediately alerts the examiner
+        raise HTTPException(status_code=503, detail=f"System Degraded: {e}")
+
+# 9. DELAY VELOCITY (Trending Analysis)
+@app.get("/analytics/velocity/{line_name}", response_model=DelayVelocity)
+def get_delay_velocity(line_name: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Calculate total delays in the current 60-minute window
+    cursor.execute("""
+        SELECT SUM(delay_minutes) as current_delays
+        FROM user_reports 
+        WHERE line_name = ? COLLATE NOCASE
+        AND report_date >= datetime('now', 'localtime', '-60 minutes')
+    """, (line_name,))
+    current_result = cursor.fetchone()
+    current_delays = current_result["current_delays"] or 0
+    
+    # Calculate total delays in the PREVIOUS 60-minute window (T-120 to T-60)
+    cursor.execute("""
+        SELECT SUM(delay_minutes) as past_delays
+        FROM user_reports 
+        WHERE line_name = ? COLLATE NOCASE
+        AND report_date >= datetime('now', 'localtime', '-120 minutes')
+        AND report_date < datetime('now', 'localtime', '-60 minutes')
+    """, (line_name,))
+    past_result = cursor.fetchone()
+    past_delays = past_result["past_delays"] or 0
+    
+    conn.close()
+
+    # Determine mathematical trajectory
+    difference = current_delays - past_delays
+    
+    if current_delays == 0 and past_delays == 0:
+        trend = "Stable"
+        assessment = "No recent disruptions."
+    elif difference > 0:
+        trend = f"+{difference} minutes"
+        assessment = "Accelerating (Conditions are worsening)"
+    elif difference < 0:
+        trend = f"{difference} minutes"
+        assessment = "Resolving (Conditions are improving)"
+    else:
+        trend = "0 minutes"
+        assessment = "Stagnant (Disruption is ongoing but stable)"
+
+    return {
+        "line_name": line_name.capitalize(),
+        "current_hour_delay_minutes": current_delays,
+        "previous_hour_delay_minutes": past_delays,
+        "trend": trend,
+        "velocity_assessment": assessment
+    }
+
 # --- ADVANCED ANALYTICS (Section 3b Requirements) ---
 
-# 1. ENHANCED Route-Level Reliability Scores
+# 1. ENHANCED Route-Level Reliability Scores (Strict Assessment)
 @app.get("/analytics/reliability/{line_name}", response_model=ReliabilityScore)
 def get_reliability_score(line_name: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Get Official Status
-    cursor.execute("SELECT status FROM tfl_live_status WHERE line_name = ? COLLATE NOCASE", (line_name,))
+    # 1. Get ONLY the Latest Official Status
+    cursor.execute("""
+        SELECT status FROM tfl_live_status 
+        WHERE line_name = ? COLLATE NOCASE 
+        ORDER BY timestamp DESC LIMIT 1
+    """, (line_name,))
     tfl_data = cursor.fetchone()
     
     if not tfl_data:
@@ -248,36 +421,54 @@ def get_reliability_score(line_name: str):
         
     official_status = tfl_data["status"]
     
-    # 2. Get Advanced User Metrics using SQL Aggregations
+    # 2. Get User Metrics strictly from the last 2 hours
     cursor.execute("""
         SELECT 
             COUNT(id) as total_reports,
-            SUM(delay_minutes) as total_minutes,
             AVG(delay_minutes) as avg_delay,
             MAX(delay_minutes) as max_delay
         FROM user_reports 
         WHERE line_name = ? COLLATE NOCASE
+        AND report_date >= datetime('now', 'localtime', '-2 hours')
     """, (line_name,))
     
     metrics = cursor.fetchone()
     conn.close()
 
-    # Safely handle None values if there are zero user reports for this line yet
     total_reports = metrics["total_reports"] or 0
-    total_minutes = metrics["total_minutes"] or 0
     avg_delay = round(metrics["avg_delay"] or 0.0, 1)
     max_delay = metrics["max_delay"] or 0
-
-    # Calculate complex score
-    score = 100.0
-    if official_status != "Good Service":
-        score -= 40.0 
     
-    # Dynamic penalty based on actual severity, not just report count
-    score -= (total_reports * 2.0) + (total_minutes * 0.1) 
+    # Calculate the Buffer Time Index (Unpredictability)
+    buffer_time = round(float(max_delay - avg_delay), 1)
+
+    # STRICT SCORING ALGORITHM
+    score = 100.0
+    
+    # 1. Official Infrastructure Penalty
+    if official_status != "Good Service":
+        score -= 30.0 
+        
+    # 2. Consensus Delay Penalty (1.5 points per average minute lost)
+    score -= (avg_delay * 1.5)
+    
+    # 3. Variance Penalty (Strictly punishing unpredictability)
+    if buffer_time > 15:
+        score -= 20.0  # Massive penalty if the delay fluctuates wildly
+    elif buffer_time > 5:
+        score -= 10.0
+
     score = max(0.0, min(100.0, round(score, 1)))
     
-    assessment = "Excellent" if score > 80 else "Degraded" if score > 50 else "Severe Failure"
+    # Stricter categorization
+    if score >= 90:
+        assessment = "Optimal (Highly Reliable)"
+    elif score >= 70:
+        assessment = "Acceptable Variance"
+    elif score >= 40:
+        assessment = "Degraded (High Commuter Risk)"
+    else:
+        assessment = "System Failure (Avoid Route)"
 
     return {
         "line_name": line_name.capitalize(),
@@ -286,9 +477,9 @@ def get_reliability_score(line_name: str):
         "assessment": assessment,
         "user_metrics": {
             "total_reports": total_reports,
-            "total_minutes_lost": total_minutes,
-            "average_delay_minutes": avg_delay,
-            "worst_single_delay": max_delay
+            "crowd_consensus_delay": avg_delay,
+            "peak_delay": max_delay,
+            "buffer_time_index": buffer_time
         }
     }
 
@@ -302,11 +493,11 @@ def get_delay_patterns():
         SELECT 
             issue_type, 
             COUNT(id) as incident_count,
-            SUM(delay_minutes) as total_minutes_lost,
-            AVG(delay_minutes) as average_delay_minutes
+            AVG(delay_minutes) as average_delay_minutes,
+            MAX(delay_minutes) as peak_delay_minutes
         FROM user_reports 
         GROUP BY issue_type 
-        ORDER BY total_minutes_lost DESC
+        ORDER BY incident_count DESC, peak_delay_minutes DESC
     """)
     patterns = cursor.fetchall()
     conn.close()
@@ -316,8 +507,8 @@ def get_delay_patterns():
         formatted_patterns.append({
             "issue_type": row["issue_type"],
             "incident_count": row["incident_count"],
-            "total_minutes_lost": row["total_minutes_lost"] or 0,
-            "average_delay_minutes": round(row["average_delay_minutes"] or 0.0, 1)
+            "average_delay_minutes": round(row["average_delay_minutes"] or 0.0, 1),
+            "peak_delay_minutes": row["peak_delay_minutes"] or 0
         })
         
     return formatted_patterns
