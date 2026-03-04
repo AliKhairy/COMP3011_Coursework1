@@ -1,16 +1,39 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import List
 import sqlite3
 from datetime import datetime
 import asyncio
 import logging
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from import_tfl_data import fetch_tfl_data
+
 import time # Add this to your imports at the top if you don't have it
 
 # --- GLOBAL APP STATE ---
 API_START_TIME = time.time()
+
+# --- SECURITY: IN-MEMORY RATE LIMITER ---
+RATE_LIMIT_STORE = defaultdict(list)
+MAX_REPORTS_PER_HOUR = 3
+
+def verify_rate_limit(request: Request):
+    client_ip = request.client.host
+    current_time = time.time()
+    
+    # 1. Purge timestamps older than 1 hour (3600 seconds) from this IP's history
+    RATE_LIMIT_STORE[client_ip] = [t for t in RATE_LIMIT_STORE[client_ip] if current_time - t < 3600]
+    
+    # 2. Check if the user has hit the maximum allowed requests
+    if len(RATE_LIMIT_STORE[client_ip]) >= MAX_REPORTS_PER_HOUR:
+        raise HTTPException(
+            status_code=429, 
+            detail="Rate limit exceeded. To ensure data integrity, you are limited to 3 reports per hour."
+        )
+        
+    # 3. Log the new request timestamp
+    RATE_LIMIT_STORE[client_ip].append(current_time)
 
 # --- PROFESSIONAL LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +69,7 @@ app = FastAPI(
 # --- PYDANTIC MODELS (Data Validation) ---
 
 class SystemHealth(BaseModel):
-    api_uptime_seconds: float  # Replaced the static 'api_status'
+    api_uptime_seconds: float
     database_status: str
     background_worker_status: str
     last_tfl_sync: str | None
@@ -108,11 +131,6 @@ class LineUptime(BaseModel):
     official_disruption_snapshots: int  # Replaces the fragile minutes calculation
     current_status: str
 
-class SystemHealth(BaseModel):
-    status: str
-    database: str
-    last_tfl_sync: str | None
-
 class DelayVelocity(BaseModel):
     line_name: str
     current_hour_delay_minutes: int
@@ -131,12 +149,13 @@ def get_db_connection():
 def root():
     return {"message": "Welcome to the London Underground Reliability API"}
 
-# 1. CREATE
-@app.post("/reports", response_model=UserReportResponse, status_code=201)
+# 1. CREATE (Secured with IP Rate Limiting)
+@app.post("/reports", response_model=UserReportResponse, status_code=201, dependencies=[Depends(verify_rate_limit)])
 def create_report(report: UserReportCreate):
     conn = get_db_connection()
     cursor = conn.cursor()
-    report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Enforcing strict UTC for database inserts to prevent timezone drift
+    report_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     
     cursor.execute(
         "INSERT INTO user_reports (line_name, delay_minutes, issue_type, report_date) VALUES (?, ?, ?, ?)",
@@ -174,18 +193,22 @@ def get_reports(skip: int = 0, limit: int = 50, line_name: str | None = None):
 def update_report(report_id: int, report: UserReportCreate):
     conn = get_db_connection()
     cursor = conn.cursor()
+    
+    # FIX: Changed 'cause' to 'issue_type' to match the Pydantic model
     cursor.execute(
-        "UPDATE user_reports SET line_name = ?, delay_minutes = ?, cause = ? WHERE id = ?",
-        (report.line_name, report.delay_minutes, report.cause, report_id)
+        "UPDATE user_reports SET line_name = ?, delay_minutes = ?, issue_type = ? WHERE id = ?",
+        (report.line_name, report.delay_minutes, report.issue_type, report_id)
     )
     if cursor.rowcount == 0:
         conn.close()
         raise HTTPException(status_code=404, detail="Report not found")
+    
     conn.commit()
     
     cursor.execute("SELECT * FROM user_reports WHERE id = ?", (report_id,))
     updated_row = cursor.fetchone()
     conn.close()
+    
     return dict(updated_row)
 
 # 4. DELETE
@@ -204,14 +227,13 @@ def delete_report(report_id: int):
 # 5. READ (Live TfL Status)
 @app.get("/live-status", response_model=List[TflStatusResponse])
 def get_live_status():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tfl_live_status ORDER BY line_name ASC")
-    statuses = cursor.fetchall()
-    conn.close()
+    # The 'with' block ensures conn.close() happens automatically!
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tfl_live_status ORDER BY line_name ASC")
+        statuses = cursor.fetchall()
     
     if not statuses:
-        # Proper error handling if someone hits the endpoint before running the import script
         raise HTTPException(status_code=404, detail="No live data found. Please run the import script.")
         
     return [dict(row) for row in statuses]
@@ -235,7 +257,7 @@ def get_discrepancies():
         RecentReports AS (
             SELECT line_name, delay_minutes, id
             FROM user_reports
-            WHERE report_date >= datetime('now', 'localtime', '-2 hours')
+            WHERE report_date >= datetime('now', '-2 hours')
         )
         SELECT 
             t.line_name,
@@ -288,7 +310,7 @@ def get_network_uptime():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Mathematically sound counting. No magic numbers or assumptions about polling frequency.
+    # Mathematically sound counting. Sorting by bad_checks directly in the database.
     query = """
         SELECT 
             line_name,
@@ -296,9 +318,9 @@ def get_network_uptime():
             SUM(CASE WHEN status = 'Good Service' THEN 1 ELSE 0 END) as good_checks,
             SUM(CASE WHEN status != 'Good Service' THEN 1 ELSE 0 END) as bad_checks
         FROM tfl_live_status
-        WHERE timestamp >= datetime('now', 'localtime', '-24 hours')
+        WHERE timestamp >= datetime('now', '-24 hours')
         GROUP BY line_name
-        ORDER BY uptime_percentage ASC
+        ORDER BY bad_checks DESC
     """
     
     cursor.execute(query)
@@ -382,80 +404,124 @@ def get_health_check():
 
     return health_report
 
-# 9. DELAY VELOCITY (Trending Analysis)
+# 9. DELAY VELOCITY (Trending Analysis - UTC and Severity Based)
 @app.get("/analytics/velocity/{line_name}", response_model=DelayVelocity)
 def get_delay_velocity(line_name: str):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Calculate total delays in the current 60-minute window
+    # Calculate AVERAGE and MAX severity in the current 60-minute window (UTC)
     cursor.execute("""
-        SELECT SUM(delay_minutes) as current_delays
+        SELECT 
+            AVG(delay_minutes) as avg_delays,
+            MAX(delay_minutes) as max_delays
         FROM user_reports 
         WHERE line_name = ? COLLATE NOCASE
-        AND report_date >= datetime('now', 'localtime', '-60 minutes')
+        AND report_date >= datetime('now', '-60 minutes')
     """, (line_name,))
     current_result = cursor.fetchone()
-    current_delays = current_result["current_delays"] or 0
     
-    # Calculate total delays in the PREVIOUS 60-minute window (T-120 to T-60)
+    current_avg = round(current_result["avg_delays"] or 0, 1)
+    current_max = current_result["max_delays"] or 0
+    
+    # Calculate AVERAGE and MAX severity in the PREVIOUS 60-minute window (UTC)
     cursor.execute("""
-        SELECT SUM(delay_minutes) as past_delays
+        SELECT 
+            AVG(delay_minutes) as past_avg,
+            MAX(delay_minutes) as past_max
         FROM user_reports 
         WHERE line_name = ? COLLATE NOCASE
-        AND report_date >= datetime('now', 'localtime', '-120 minutes')
-        AND report_date < datetime('now', 'localtime', '-60 minutes')
+        AND report_date >= datetime('now', '-120 minutes')
+        AND report_date < datetime('now', '-60 minutes')
     """, (line_name,))
     past_result = cursor.fetchone()
-    past_delays = past_result["past_delays"] or 0
     
+    past_avg = round(past_result["past_avg"] or 0, 1)
+    past_max = past_result["past_max"] or 0
     conn.close()
 
-    # Determine mathematical trajectory
-    difference = current_delays - past_delays
+    # Determine mathematical trajectory based on Average Consensus
+    difference = round(current_avg - past_avg, 1)
     
-    if current_delays == 0 and past_delays == 0:
+    if current_avg == 0 and past_avg == 0:
         trend = "Stable"
         assessment = "No recent disruptions."
     elif difference > 0:
         trend = f"+{difference} minutes"
-        assessment = "Accelerating (Conditions are worsening)"
+        assessment = f"Accelerating (Peak severity currently at {current_max} mins)"
     elif difference < 0:
         trend = f"{difference} minutes"
-        assessment = "Resolving (Conditions are improving)"
+        assessment = f"Resolving (Peak severity dropped from {past_max} to {current_max} mins)"
     else:
-        trend = "0 minutes"
-        assessment = "Stagnant (Disruption is ongoing but stable)"
+        trend = "0.0 minutes"
+        assessment = "Stagnant (Disruption severity is unchanged)"
 
+    # We reuse the existing DelayVelocity Pydantic model structure, 
+    # but feed it our statistically accurate integers/floats
     return {
         "line_name": line_name.capitalize(),
-        "current_hour_delay_minutes": current_delays,
-        "previous_hour_delay_minutes": past_delays,
+        "current_hour_delay_minutes": int(current_avg), 
+        "previous_hour_delay_minutes": int(past_avg),
         "trend": trend,
         "velocity_assessment": assessment
     }
 
 # --- ADVANCED ANALYTICS (Section 3b Requirements) ---
 
-# 1. ENHANCED Route-Level Reliability Scores (Strict Assessment)
-@app.get("/analytics/reliability/{line_name}", response_model=ReliabilityScore)
-def get_reliability_score(line_name: str):
+# 1. CREATE (Secured with Rate Limiting and Dynamic Anomaly Detection)
+@app.post("/reports", response_model=UserReportResponse, status_code=201, dependencies=[Depends(verify_rate_limit)])
+def create_report(report: UserReportCreate):
+    # Absolute Hard Cap (The physical limits of reality)
+    if report.delay_minutes > 300:
+        raise HTTPException(status_code=400, detail="Anomaly detected: Delay exceeds realistic physical limits (5 hours).")
+
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Get ONLY the Latest Official Status
+    # --- Z-SCORE ANOMALY DETECTION ---
+    # Fetch recent delays for this specific line to establish a statistical baseline
     cursor.execute("""
-        SELECT status FROM tfl_live_status 
-        WHERE line_name = ? COLLATE NOCASE 
-        ORDER BY timestamp DESC LIMIT 1
-    """, (line_name,))
-    tfl_data = cursor.fetchone()
+        SELECT delay_minutes FROM user_reports 
+        WHERE line_name = ? COLLATE NOCASE
+        AND report_date >= datetime('now', '-2 hours')
+    """, (report.line_name,))
     
-    if not tfl_data:
-        conn.close()
-        raise HTTPException(status_code=404, detail=f"Line '{line_name}' not found in TfL data.")
+    recent_delays = [row["delay_minutes"] for row in cursor.fetchall()]
+    
+    # We only apply statistical filtering if we have a viable sample size
+    if len(recent_delays) >= 5:
+        mean = sum(recent_delays) / len(recent_delays)
+        variance = sum((x - mean) ** 2 for x in recent_delays) / len(recent_delays)
+        std_dev = math.sqrt(variance)
         
-    official_status = tfl_data["status"]
+        # Calculate Z-Score (how many standard deviations away from the mean this report is)
+        if std_dev > 0:
+            z_score = (report.delay_minutes - mean) / std_dev
+            
+            # Reject if it's beyond 3 standard deviations AND mathematically significant (> 30 mins)
+            if z_score > 3.0 and report.delay_minutes > 30:
+                conn.close()
+                raise HTTPException(
+                    status_code=422, 
+                    detail=f"Statistical anomaly detected. Report rejected. (Z-Score: {round(z_score, 2)})"
+                )
+        elif report.delay_minutes > mean + 45:
+            # Fallback if std_dev is 0 (all recent reports were exactly the same)
+            conn.close()
+            raise HTTPException(status_code=422, detail="Statistical anomaly detected. Report rejected.")
+    
+    # --- SAFE DATABASE INSERT ---
+    report_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    
+    cursor.execute(
+        "INSERT INTO user_reports (line_name, delay_minutes, issue_type, report_date) VALUES (?, ?, ?, ?)",
+        (report.line_name, report.delay_minutes, report.issue_type, report_date)
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    
+    return {**report.model_dump(), "id": new_id, "report_date": report_date}
     
     # 2. Get User Metrics strictly from the last 2 hours
     cursor.execute("""
@@ -465,7 +531,7 @@ def get_reliability_score(line_name: str):
             MAX(delay_minutes) as max_delay
         FROM user_reports 
         WHERE line_name = ? COLLATE NOCASE
-        AND report_date >= datetime('now', 'localtime', '-2 hours')
+        AND report_date >= datetime('now', '-2 hours')
     """, (line_name,))
     
     metrics = cursor.fetchone()
@@ -532,6 +598,7 @@ def get_delay_patterns():
             AVG(delay_minutes) as average_delay_minutes,
             MAX(delay_minutes) as peak_delay_minutes
         FROM user_reports 
+        WHERE report_date >= datetime('now', '-30 days')
         GROUP BY issue_type 
         ORDER BY incident_count DESC, peak_delay_minutes DESC
     """)
@@ -558,6 +625,7 @@ def get_temporal_summary():
     cursor.execute("""
         SELECT strftime('%H', report_date) as hour_of_day, COUNT(id) as total_incidents
         FROM user_reports
+        WHERE report_date >= datetime('now', '-30 days')
         GROUP BY hour_of_day
         ORDER BY hour_of_day ASC
     """)
