@@ -22,7 +22,7 @@ MAX_REPORTS_PER_HOUR = 3
 
 
 def verify_rate_limit(request: Request):
-    client_ip = request.client.host
+    client_ip = request.client.host if request.client else "unknown_ip"
     current_time = time.time()
 
     # 1. Purge timestamps older than 1 hour (3600 seconds) from this IP's history
