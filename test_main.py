@@ -177,9 +177,10 @@ def test_severity_mismatch_engine():
 
 # --- 7. ENDPOINT TESTS: PAGINATION & LIMITS ---
 
+
 def test_pagination_and_limits(client):
     current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    
+
     # Use main.get_db_connection() to guarantee we hit the mocked RAM DB
     with main.get_db_connection() as conn:
         for i in range(5):
@@ -196,15 +197,16 @@ def test_pagination_and_limits(client):
     res_skip = client.get("/reports?skip=3&limit=5")
     assert res_skip.status_code == 200
     assert len(res_skip.json()) == 2
-    
+
     res_abuse = client.get("/reports?limit=101")
     assert res_abuse.status_code == 422
 
 # --- 8. ENDPOINT TESTS: ENUM FILTERING ---
 
+
 def test_query_filtering(client):
     current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    
+
     with main.get_db_connection() as conn:
         records = [
             ('Victoria', 10, 'Stuck in tunnel', current_utc),
@@ -233,11 +235,12 @@ def test_query_filtering(client):
 
 # --- 9. ENDPOINT TESTS: SYSTEM HEALTH & STALE DATA ---
 
+
 def test_health_check_healthy(client):
     current_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    
+
     with main.get_db_connection() as conn:
-        conn.execute("DELETE FROM tfl_live_status") 
+        conn.execute("DELETE FROM tfl_live_status")
         conn.execute("""
             INSERT INTO tfl_live_status (line_name, status, reason, timestamp)
             VALUES ('Central', 'Good Service', 'N/A', ?)
@@ -250,10 +253,12 @@ def test_health_check_healthy(client):
     assert data["database_status"] == "connected"
     assert data["background_worker_status"] == "healthy"
 
+
 def test_health_check_stale_data(client):
     # timedelta is now safely defined at the top of the file
-    stale_time = (datetime.now(timezone.utc) - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
-    
+    stale_time = (datetime.now(timezone.utc) - timedelta(minutes=15)
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+
     with main.get_db_connection() as conn:
         conn.execute("DELETE FROM tfl_live_status")
         conn.execute("""

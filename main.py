@@ -1,17 +1,19 @@
-import uuid
-from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
-import sqlite3
-from datetime import datetime, timezone
+# pylint: disable=missing-docstring, invalid-name
 import asyncio
 import logging
-from collections import defaultdict
-from contextlib import asynccontextmanager
-from import_tfl_data import fetch_tfl_data
-import time  # Add this to your imports at the top if you don't have it
 import math
+import sqlite3
+import time  # Add this to your imports at the top if you don't have it
+import uuid
+from collections import defaultdict
+from contextlib import asynccontextmanager, closing
+from datetime import datetime, timezone
 from enum import Enum
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from contextlib import closing
+
+from import_tfl_data import fetch_tfl_data
 
 # --- GLOBAL APP STATE ---
 API_START_TIME = time.time()
@@ -27,13 +29,14 @@ def verify_rate_limit(request: Request):
 
     # 1. Purge timestamps older than 1 hour (3600 seconds) from this IP's history
     RATE_LIMIT_STORE[client_ip] = [
-        t for t in RATE_LIMIT_STORE[client_ip] if current_time - t < 3600]
+        t for t in RATE_LIMIT_STORE[client_ip] if current_time - t < 3600
+    ]
 
     # 2. Check if the user has hit the maximum allowed requests
     if len(RATE_LIMIT_STORE[client_ip]) >= MAX_REPORTS_PER_HOUR:
         raise HTTPException(
             status_code=429,
-            detail="Rate limit exceeded. To ensure data integrity, you are limited to 3 reports per hour."
+            detail="Rate limit exceeded. To ensure data integrity, you are limited to 3 reports per hour.",
         )
 
     # 3. Log the new request timestamp
@@ -54,8 +57,7 @@ async def update_data_periodically():
             logger.info("Triggering TfL live data fetch...")
             # We run the fetch script and force Uvicorn to acknowledge it
             await asyncio.to_thread(fetch_tfl_data)
-            logger.info(
-                "TfL data successfully updated. Sleeping for 5 minutes.")
+            logger.info("TfL data successfully updated. Sleeping for 5 minutes.")
         except Exception as e:
             logger.error(f"CRITICAL: Background task failed - {e}")
 
@@ -68,7 +70,8 @@ async def cleanup_rate_limiter():
         current_time = time.time()
         # Find IPs that haven't made a request in the last hour
         stale_ips = [
-            ip for ip, timestamps in RATE_LIMIT_STORE.items()
+            ip
+            for ip, timestamps in RATE_LIMIT_STORE.items()
             if not timestamps or current_time - timestamps[-1] > 3600
         ]
         # Delete them completely from memory
@@ -92,7 +95,7 @@ app = FastAPI(
     title="London Underground Reliability API",
     description="A dual-model API tracking user-reported delays and official TfL live statuses with background auto-updating.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # --- PYDANTIC MODELS (Data Validation) ---
@@ -106,18 +109,18 @@ class SystemHealth(BaseModel):
 
 
 class TfLLine(str, Enum):
-    bakerloo = "Bakerloo"
-    central = "Central"
-    circle = "Circle"
-    district = "District"
-    elizabeth = "Elizabeth line"
-    hammersmith = "Hammersmith & City"
-    jubilee = "Jubilee"
-    metropolitan = "Metropolitan"
-    northern = "Northern"
-    piccadilly = "Piccadilly"
-    victoria = "Victoria"
-    waterloo = "Waterloo & City"
+    BAKERLOO = "Bakerloo"
+    CENTRAL = "Central"
+    CIRCLE = "Circle"
+    DISTRICT = "District"
+    ELIZABETH = "Elizabeth line"
+    HAMMERSMITH = "Hammersmith & City"
+    JUBILEE = "Jubilee"
+    METROPOLITAN = "Metropolitan"
+    NORTHERN = "Northern"
+    PICCADILLY = "Piccadilly"
+    VICTORIA = "Victoria"
+    WATERLOO = "Waterloo & City"
 
 
 class UserReportResponse(BaseModel):
@@ -208,9 +211,11 @@ class UserReportCreateResponse(BaseModel):
 class UserReportCreate(BaseModel):
     line_name: TfLLine
     # Enforce realistic math right at the front door
-    delay_minutes: int = Field(..., gt=0, le=300,
-                               description="Delay in minutes (1 to 300)")
+    delay_minutes: int = Field(
+        ..., gt=0, le=300, description="Delay in minutes (1 to 300)"
+    )
     observed_experience: ObservedExperience
+
 
 # --- DATABASE HELPER ---
 
@@ -222,6 +227,7 @@ def get_db_connection():
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
+
 # --- ENDPOINTS (User Reports CRUD) ---
 
 
@@ -229,10 +235,16 @@ def get_db_connection():
 def root():
     return {"message": "Welcome to the London Underground Reliability API"}
 
+
 # 1. CREATE (Secured with Rate Limiting and Dynamic Anomaly Detection)
 
 
-@app.post("/reports", response_model=UserReportCreateResponse, status_code=201, dependencies=[Depends(verify_rate_limit)])
+@app.post(
+    "/reports",
+    response_model=UserReportCreateResponse,
+    status_code=201,
+    dependencies=[Depends(verify_rate_limit)],
+)
 def create_report(report: UserReportCreate):
     # Notice we don't need the 'if delay_minutes > 300' check here anymore.
     # Pydantic handles it automatically and returns a 422 error if violated!
@@ -242,18 +254,20 @@ def create_report(report: UserReportCreate):
 
         # --- Z-SCORE ANOMALY DETECTION ---
         # report.line_name.value extracts the string from the Enum
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT delay_minutes FROM user_reports 
-            WHERE line_name = ? COLLATE NOCASE
+            WHERE line_name = ? COLLATE NOCASE 
             AND report_date >= datetime('now', '-2 hours')
-        """, (report.line_name.value,))
+        """,
+            (report.line_name.value,),
+        )
 
         recent_delays = [row["delay_minutes"] for row in cursor.fetchall()]
 
         if len(recent_delays) >= 5:
             mean = sum(recent_delays) / len(recent_delays)
-            variance = sum(
-                (x - mean) ** 2 for x in recent_delays) / len(recent_delays)
+            variance = sum((x - mean) ** 2 for x in recent_delays) / len(recent_delays)
             std_dev = math.sqrt(variance)
 
             # THE FIX: Check for a "Breaking Incident" (multiple high delays recently)
@@ -264,11 +278,13 @@ def create_report(report: UserReportCreate):
                 if z_score > 3.0 and report.delay_minutes > 30:
                     raise HTTPException(
                         status_code=422,
-                        detail=f"Statistical anomaly detected. Report rejected. (Z-Score: {round(z_score, 2)})"
+                        detail=f"Statistical anomaly detected. Report rejected. (Z-Score: {round(z_score, 2)})",
                     )
             elif report.delay_minutes > mean + 45 and not breaking_incident:
                 raise HTTPException(
-                    status_code=422, detail="Statistical anomaly detected. Report rejected.")
+                    status_code=422,
+                    detail="Statistical anomaly detected. Report rejected.",
+                )
 
         # --- GENERATE SECURE EDIT TOKEN ---
         # This creates a unique string like "123e4567-e89b-12d3-a456-426614174000"
@@ -276,10 +292,19 @@ def create_report(report: UserReportCreate):
         report_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         # --- SAFE DATABASE INSERT ---
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO user_reports (line_name, delay_minutes, observed_experience, report_date, edit_token) 
             VALUES (?, ?, ?, ?, ?)
-        """, (report.line_name.value, report.delay_minutes, report.observed_experience.value, report_date, edit_token))
+        """,
+            (
+                report.line_name.value,
+                report.delay_minutes,
+                report.observed_experience.value,
+                report_date,
+                edit_token,
+            ),
+        )
 
         conn.commit()
         new_id = cursor.lastrowid
@@ -291,8 +316,9 @@ def create_report(report: UserReportCreate):
         "delay_minutes": report.delay_minutes,
         "observed_experience": report.observed_experience,
         "report_date": report_date,
-        "edit_token": edit_token
+        "edit_token": edit_token,
     }
+
 
 # 2. READ (Paginated, Filtered, and Protected)
 
@@ -301,9 +327,10 @@ def create_report(report: UserReportCreate):
 def get_reports(
     skip: int = Query(0, ge=0, description="Records to skip for pagination"),
     limit: int = Query(
-        50, ge=1, le=100, description="Max 100 records per request to prevent DoS"),
+        50, ge=1, le=100, description="Max 100 records per request to prevent DoS"
+    ),
     line_name: TfLLine | None = None,
-    experience: ObservedExperience | None = None
+    experience: ObservedExperience | None = None,
 ):
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
@@ -328,6 +355,7 @@ def get_reports(
 
     return [dict(row) for row in reports]
 
+
 # 3. UPDATE (Secured with Edit Token)
 
 
@@ -336,14 +364,14 @@ def update_report(
     report_id: int,
     report: UserReportCreate,
     x_edit_token: str = Header(
-        ..., description="The secret token provided when the report was created")
+        ..., description="The secret token provided when the report was created"
+    ),
 ):
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
 
         # Security Check: Retrieve the existing token from the database
-        cursor.execute(
-            "SELECT edit_token FROM user_reports WHERE id = ?", (report_id,))
+        cursor.execute("SELECT edit_token FROM user_reports WHERE id = ?", (report_id,))
         existing_report = cursor.fetchone()
 
         if not existing_report:
@@ -352,23 +380,36 @@ def update_report(
         # Verify the token
         if existing_report["edit_token"] != x_edit_token:
             raise HTTPException(
-                status_code=403, detail="Forbidden: Invalid edit token. You can only edit your own reports.")
+                status_code=403,
+                detail="Forbidden: Invalid edit token. You can only edit your own reports.",
+            )
 
         # If the token matches, proceed with the update!
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE user_reports 
             SET line_name = ?, delay_minutes = ?, observed_experience = ? 
             WHERE id = ?
-        """, (report.line_name.value, report.delay_minutes, report.observed_experience.value, report_id))
+        """,
+            (
+                report.line_name.value,
+                report.delay_minutes,
+                report.observed_experience.value,
+                report_id,
+            ),
+        )
 
         conn.commit()
 
         # Fetch the updated data to return to the user
         cursor.execute(
-            "SELECT id, line_name, delay_minutes, observed_experience, report_date FROM user_reports WHERE id = ?", (report_id,))
+            "SELECT id, line_name, delay_minutes, observed_experience, report_date FROM user_reports WHERE id = ?",
+            (report_id,),
+        )
         updated_row = cursor.fetchone()
 
     return dict(updated_row)
+
 
 # 4. DELETE (Secured with Edit Token)
 
@@ -377,14 +418,14 @@ def update_report(
 def delete_report(
     report_id: int,
     x_edit_token: str = Header(
-        ..., description="The secret token provided when the report was created")
+        ..., description="The secret token provided when the report was created"
+    ),
 ):
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
 
         # Security Check: Retrieve the existing token
-        cursor.execute(
-            "SELECT edit_token FROM user_reports WHERE id = ?", (report_id,))
+        cursor.execute("SELECT edit_token FROM user_reports WHERE id = ?", (report_id,))
         existing_report = cursor.fetchone()
 
         if not existing_report:
@@ -393,13 +434,16 @@ def delete_report(
         # Verify the token
         if existing_report["edit_token"] != x_edit_token:
             raise HTTPException(
-                status_code=403, detail="Forbidden: Invalid edit token. You can only delete your own reports.")
+                status_code=403,
+                detail="Forbidden: Invalid edit token. You can only delete your own reports.",
+            )
 
         # Token is valid, delete the record
         cursor.execute("DELETE FROM user_reports WHERE id = ?", (report_id,))
         conn.commit()
 
     return None
+
 
 # 5. READ (Live TfL Status - Latest Snapshot Only)
 
@@ -410,18 +454,22 @@ def get_live_status():
         cursor = conn.cursor()
 
         # Retrieve ONLY the most recent status check for each individual line
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT * FROM tfl_live_status 
             WHERE id IN (SELECT MAX(id) FROM tfl_live_status GROUP BY line_name)
             ORDER BY line_name ASC
-        """)
+        """
+        )
         statuses = cursor.fetchall()
 
     if not statuses:
         raise HTTPException(
-            status_code=404, detail="No live data found. Please run the import script.")
+            status_code=404, detail="No live data found. Please run the import script."
+        )
 
     return [dict(row) for row in statuses]
+
 
 # NEW ENDPOINT 5b: Targeted History Search
 
@@ -430,22 +478,27 @@ def get_live_status():
 def get_live_status_history(
     line_name: TfLLine,
     limit: int = Query(
-        20, ge=1, le=100, description="Limit the number of historical records returned")
+        20, ge=1, le=100, description="Limit the number of historical records returned"
+    ),
 ):
     """Fetches the recent history of official TfL statuses for a specific line."""
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT * FROM tfl_live_status 
             WHERE line_name = ? COLLATE NOCASE
             ORDER BY timestamp DESC LIMIT ?
-        """, (line_name.value, limit))
+        """,
+            (line_name.value, limit),
+        )
         history = cursor.fetchall()
 
     if not history:
         raise HTTPException(
-            status_code=404, detail=f"No history found for {line_name.value}.")
+            status_code=404, detail=f"No history found for {line_name.value}."
+        )
 
     return [dict(row) for row in history]
 
@@ -457,7 +510,7 @@ TFL_SEVERITY_MINUTES = {
     "Severe Delays": 45,
     "Part Suspended": 60,
     "Suspended": 120,
-    "Planned Closure": 0  # Ignore planned closures for this specific metric
+    "Planned Closure": 0,  # Ignore planned closures for this specific metric
 }
 
 # 6. ADVANCED ANALYTICS (The Severity Mismatch Engine)
@@ -469,15 +522,18 @@ def get_discrepancies():
         cursor = conn.cursor()
 
         # 1. Get the absolute latest TfL status for each line
-        cursor.execute("""
-            SELECT line_name, status 
-            FROM tfl_live_status 
+        cursor.execute(
+            """
+            SELECT line_name, status
+            FROM tfl_live_status
             WHERE id IN (SELECT MAX(id) FROM tfl_live_status GROUP BY line_name)
-        """)
+        """
+        )
         tfl_latest = cursor.fetchall()
 
         # 2. Get user consensus from the last 2 hours
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 line_name, 
                 COUNT(id) AS corroborating_reports,
@@ -486,7 +542,8 @@ def get_discrepancies():
             FROM user_reports
             WHERE report_date >= datetime('now', '-2 hours')
             GROUP BY line_name
-        """)
+        """
+        )
         user_reports = cursor.fetchall()
 
     # Convert reports to a dictionary for easy lookup
@@ -517,22 +574,25 @@ def get_discrepancies():
                 else:
                     confidence = "Low (Unverified single report)"
 
-                formatted_results.append({
-                    "line_name": line,
-                    "official_status": status,
-                    "corroborating_reports": reports_count,
-                    "crowd_consensus_minutes": avg_delay,
-                    "peak_delay_minutes": crowd["max_delay"],
-                    "confidence_level": confidence
-                })
+                formatted_results.append(
+                    {
+                        "line_name": line,
+                        "official_status": status,
+                        "corroborating_reports": reports_count,
+                        "crowd_consensus_minutes": avg_delay,
+                        "peak_delay_minutes": crowd["max_delay"],
+                        "confidence_level": confidence,
+                    }
+                )
 
     if not formatted_results:
         raise HTTPException(
             status_code=404,
-            detail="No discrepancies found. TfL data currently matches crowd reality."
+            detail="No discrepancies found. TfL data currently matches crowd reality.",
         )
 
     return formatted_results
+
 
 # 7. HISTORICAL ANALYTICS (24-Hour Network Uptime)
 
@@ -559,17 +619,20 @@ def get_network_uptime():
         history = cursor.fetchall()
 
         # Grab the latest statuses to attach to the payload
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT line_name, status 
             FROM tfl_live_status 
             WHERE id IN (SELECT MAX(id) FROM tfl_live_status GROUP BY line_name)
-        """)
-        latest_statuses = {row["line_name"]: row["status"]
-                           for row in cursor.fetchall()}
+        """
+        )
+        latest_statuses = {row["line_name"]: row["status"] for row in cursor.fetchall()}
 
     if not history:
         raise HTTPException(
-            status_code=404, detail="Not enough historical data collected yet. Let the background worker run.")
+            status_code=404,
+            detail="Not enough historical data collected yet. Let the background worker run.",
+        )
 
     results = []
     for row in history:
@@ -579,14 +642,17 @@ def get_network_uptime():
 
         uptime_pct = round((good / total) * 100, 1) if total > 0 else 0.0
 
-        results.append({
-            "line_name": row["line_name"],
-            "uptime_percentage": uptime_pct,
-            "official_disruption_snapshots": bad,
-            "current_status": latest_statuses.get(row["line_name"], "Unknown")
-        })
+        results.append(
+            {
+                "line_name": row["line_name"],
+                "uptime_percentage": uptime_pct,
+                "official_disruption_snapshots": bad,
+                "current_status": latest_statuses.get(row["line_name"], "Unknown"),
+            }
+        )
 
     return results
+
 
 # --- INFRASTRUCTURE & VELOCITY ---
 
@@ -602,7 +668,7 @@ def get_health_check():
         "api_uptime_seconds": current_uptime,
         "database_status": "unknown",
         "background_worker_status": "unknown",
-        "last_tfl_sync": None
+        "last_tfl_sync": None,
     }
 
     try:
@@ -615,8 +681,7 @@ def get_health_check():
             health_report["database_status"] = "connected"
 
             # Background Worker Diagnostic
-            cursor.execute(
-                "SELECT MAX(timestamp) as last_sync FROM tfl_live_status")
+            cursor.execute("SELECT MAX(timestamp) as last_sync FROM tfl_live_status")
             result = cursor.fetchone()
 
             if result and result["last_sync"]:
@@ -625,15 +690,16 @@ def get_health_check():
 
                 # Enforce UTC timezone for accurate comparison
                 last_sync_time = datetime.strptime(
-                    last_sync_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    last_sync_str, "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=timezone.utc)
                 current_time = datetime.now(timezone.utc)
-                time_since_sync = (
-                    current_time - last_sync_time).total_seconds()
+                time_since_sync = (current_time - last_sync_time).total_seconds()
 
                 # If background worker hasn't updated in 10+ minutes (600s), flag it
                 if time_since_sync > 600:
-                    health_report[
-                        "background_worker_status"] = f"degraded (stale data: {int(time_since_sync)}s old)"
+                    health_report["background_worker_status"] = (
+                        f"degraded (stale data: {int(time_since_sync)}s old)"
+                    )
                 else:
                     health_report["background_worker_status"] = "healthy"
             else:
@@ -643,9 +709,10 @@ def get_health_check():
         health_report["database_status"] = "disconnected or locked"
         health_report["background_worker_status"] = f"unreachable: {str(e)}"
         # 503 Service Unavailable is the correct industry standard here
-        raise HTTPException(status_code=503, detail=health_report)
+        raise HTTPException(status_code=503, detail=health_report) from e
 
     return health_report
+
 
 # 9. DELAY VELOCITY (Trending Analysis - UTC and Severity Based)
 
@@ -656,21 +723,25 @@ def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
         cursor = conn.cursor()
 
         # Calculate AVERAGE and MAX severity in the current 60-minute window
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 AVG(delay_minutes) as avg_delays,
                 MAX(delay_minutes) as max_delays
             FROM user_reports 
             WHERE line_name = ? COLLATE NOCASE
             AND report_date >= datetime('now', '-60 minutes')
-        """, (line_name.value,))
+        """,
+            (line_name.value,),
+        )
         current_result = cursor.fetchone()
 
         current_avg = round(current_result["avg_delays"] or 0, 1)
         current_max = current_result["max_delays"] or 0
 
         # Calculate AVERAGE and MAX severity in the PREVIOUS 60-minute window
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 AVG(delay_minutes) as past_avg,
                 MAX(delay_minutes) as past_max
@@ -678,7 +749,9 @@ def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
             WHERE line_name = ? COLLATE NOCASE
             AND report_date >= datetime('now', '-120 minutes')
             AND report_date < datetime('now', '-60 minutes')
-        """, (line_name.value,))
+        """,
+            (line_name.value,),
+        )
         past_result = cursor.fetchone()
 
         past_avg = round(past_result["past_avg"] or 0, 1)
@@ -695,7 +768,9 @@ def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
         assessment = f"Accelerating (Peak severity currently at {current_max} mins)"
     elif difference < 0:
         trend = f"{difference} minutes"
-        assessment = f"Resolving (Peak severity dropped from {past_max} to {current_max} mins)"
+        assessment = (
+            f"Resolving (Peak severity dropped from {past_max} to {current_max} mins)"
+        )
     else:
         trend = "0.0 minutes"
         assessment = "Stagnant (Disruption severity is unchanged)"
@@ -705,8 +780,9 @@ def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
         "current_hour_delay_minutes": int(current_avg),
         "previous_hour_delay_minutes": int(past_avg),
         "trend": trend,
-        "velocity_assessment": assessment
+        "velocity_assessment": assessment,
     }
+
 
 # --- ADVANCED ANALYTICS (Section 3b Requirements) ---
 
@@ -719,21 +795,27 @@ def get_reliability_score(line_name: TfLLine):  # <-- Enforce Enum here
         cursor = conn.cursor()
 
         # 1. Get ONLY the Latest Official Status
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT status FROM tfl_live_status 
             WHERE line_name = ? COLLATE NOCASE 
             ORDER BY timestamp DESC LIMIT 1
-        """, (line_name.value,))
+        """,
+            (line_name.value,),
+        )
         tfl_data = cursor.fetchone()
 
         if not tfl_data:
             raise HTTPException(
-                status_code=404, detail=f"Line '{line_name.value}' not found in TfL data.")
+                status_code=404,
+                detail=f"Line '{line_name.value}' not found in TfL data.",
+            )
 
         official_status = tfl_data["status"]
 
         # 2. Get User Metrics strictly from the last 2 hours
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 COUNT(id) as total_reports,
                 AVG(delay_minutes) as avg_delay,
@@ -741,7 +823,9 @@ def get_reliability_score(line_name: TfLLine):  # <-- Enforce Enum here
             FROM user_reports 
             WHERE line_name = ? COLLATE NOCASE
             AND report_date >= datetime('now', '-2 hours')
-        """, (line_name.value,))
+        """,
+            (line_name.value,),
+        )
         metrics = cursor.fetchone()
 
     total_reports = metrics["total_reports"] or 0
@@ -759,7 +843,7 @@ def get_reliability_score(line_name: TfLLine):  # <-- Enforce Enum here
         score -= 30.0
 
     # 2. Consensus Delay Penalty (1.5 points per average minute lost)
-    score -= (avg_delay * 1.5)
+    score -= avg_delay * 1.5
 
     # 3. Variance Penalty (Strictly punishing unpredictability)
     if buffer_time > 15:
@@ -788,9 +872,10 @@ def get_reliability_score(line_name: TfLLine):  # <-- Enforce Enum here
             "total_reports": total_reports,
             "crowd_consensus_delay": avg_delay,
             "peak_delay": max_delay,
-            "buffer_time_index": buffer_time
-        }
+            "buffer_time_index": buffer_time,
+        },
     }
+
 
 # 2. ENHANCED Delay Patterns
 
@@ -800,7 +885,8 @@ def get_delay_patterns():
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 observed_experience, 
                 COUNT(id) as incident_count,
@@ -810,10 +896,12 @@ def get_delay_patterns():
             WHERE report_date >= datetime('now', '-30 days')
             GROUP BY observed_experience 
             ORDER BY incident_count DESC, peak_delay_minutes DESC
-        """)
+        """
+        )
         patterns = cursor.fetchall()
 
     return [dict(row) for row in patterns]
+
 
 # 3. Temporal Performance Summaries (Delays by time of day)
 
@@ -825,7 +913,8 @@ def get_temporal_summary():
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 strftime('%w', report_date) as day_numeric,
                 strftime('%H', report_date) as hour_of_day, 
@@ -834,17 +923,25 @@ def get_temporal_summary():
             WHERE report_date >= datetime('now', '-30 days')
             GROUP BY day_numeric, hour_of_day
             ORDER BY day_numeric ASC, hour_of_day ASC
-        """)
+        """
+        )
         summaries = cursor.fetchall()
 
-    day_mapping = {"0": "Sunday", "1": "Monday", "2": "Tuesday",
-                   "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday"}
+    day_mapping = {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday",
+    }
 
     return [
         {
             "day_of_week": day_mapping.get(row["day_numeric"], "Unknown"),
             "hour_of_day": row["hour_of_day"],
-            "total_incidents": row["total_incidents"]
+            "total_incidents": row["total_incidents"],
         }
         for row in summaries
     ]
