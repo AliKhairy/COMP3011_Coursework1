@@ -1,26 +1,25 @@
 import sqlite3
 import requests
-from datetime import datetime
+from datetime import datetime, timezone # Import timezone
 
 def fetch_tfl_data():
     print("Fetching live TfL Tube status...")
     url = "https://api.tfl.gov.uk/Line/Mode/tube/Status"
     
     try:
-        response = requests.get(url)
-        response.raise_for_status() # Crashes safely if the API is down
+        # Added timeout to prevent the script from hanging indefinitely if TfL servers stall
+        response = requests.get(url, timeout=10)
+        response.raise_for_status() 
         tube_data = response.json()
 
-        conn = sqlite3.connect("transport_api.db")
+        # Added timeout=15: If FastAPI is querying the DB, wait up to 15 seconds for the lock to clear
+        conn = sqlite3.connect("transport_api.db", timeout=15.0)
         cursor = conn.cursor()
 
-        # We wipe the table first so we only ever store the most recent snapshot
-        cursor.execute("DELETE FROM tfl_live_status")
-
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # STRICT UTC IMPLEMENTATION
+        current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         records = []
 
-        # Extract the relevant fields from TfL's complex nested JSON
         for line in tube_data:
             line_name = line.get("name", "Unknown")
             statuses = line.get("lineStatuses", [])
@@ -40,10 +39,14 @@ def fetch_tfl_data():
         )
         conn.commit()
         conn.close()
-        print(f"Success! Updated {len(records)} Tube lines in the database.")
+        print(f"Success! Updated {len(records)} Tube lines in the database at UTC {current_time}.")
 
+    except requests.exceptions.RequestException as req_err:
+        print(f"Network error fetching TfL data: {req_err}")
+    except sqlite3.OperationalError as db_err:
+        print(f"CRITICAL: Database locking issue - {db_err}")
     except Exception as e:
-        print(f"Error fetching data: {e}")
+        print(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     fetch_tfl_data()
