@@ -32,11 +32,11 @@ The analytics endpoints do not merely return raw data; they interpret it to prov
 ---
 
 ## Setup & Local Execution
-Follow these steps to deploy the API locally.
+Follow these steps to deploy the API locally. This project uses strict versioning to guarantee deterministic builds.
 
-1. Initialize your virtual environment and install the required dependencies:
+1. Initialize your virtual environment and install the exact project dependencies:
 ```bash
-pip install fastapi uvicorn pydantic
+pip install -r requirements.txt
 ```
 2. Boot the Uvicorn server:
 ```bash
@@ -45,12 +45,9 @@ uvicorn main:app --reload
 3. The background worker will automatically initialize and fetch the first snapshot of TfL data. Access the interactive API documentation at ```http://127.0.0.1:8000/docs```.
 
 ## Automated Testing
-To verify boundary limits, anomaly detection, and edge cases, execute the test suite.
-1. Ensure testing libraries are installed:
-```bash
-pip install pytest httpx
-```
-2. Execute the automated system checks in the root directory:
+To verify boundary limits, anomaly detection, and edge cases, execute the Pytest suite. Testing dependencies are already included in the requirements file.
+
+1. Execute the automated system checks in the root directory:
 ```bash
 pytest -v
 ```
