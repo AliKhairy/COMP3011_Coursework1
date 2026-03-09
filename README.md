@@ -51,3 +51,10 @@ To verify boundary limits, anomaly detection, and edge cases, execute the Pytest
 ```bash
 pytest -v
 ```
+### Manual Security Testing (IDOR Protection)
+To manually verify the stateless edit token architecture via Swagger UI (`/docs`):
+
+1. Execute a `POST /reports` request to generate a new delay report.
+2. Extract the `edit_token` string from the `201 Created` response payload.
+3. Attempt to `PUT` or `DELETE` that specific report ID without the token (Expected Result: `422 Validation Error`).
+4. Inject the token into the `x-edit-token` header parameter and re-send the request (Expected Result: `200 OK` or `204 No Content`).
