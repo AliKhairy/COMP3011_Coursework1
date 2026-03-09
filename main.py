@@ -107,6 +107,16 @@ class SystemHealth(BaseModel):
     background_worker_status: str
     last_tfl_sync: str | None
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "api_uptime_seconds": 3402.5,
+                "database_status": "connected",
+                "background_worker_status": "healthy",
+                "last_tfl_sync": "2026-03-09 17:30:00"
+            }]
+        }
+    }
 
 class TfLLine(str, Enum):
     BAKERLOO = "Bakerloo"
@@ -122,6 +132,12 @@ class TfLLine(str, Enum):
     VICTORIA = "Victoria"
     WATERLOO = "Waterloo & City"
 
+class ObservedExperience(str, Enum):
+    STUCK_IN_TUNNEL = "Stuck in tunnel"
+    CRAWLING_PACE = "Train moving at a crawling pace"
+    PLATFORM_CROWDED = "Platform dangerously crowded"
+    GHOST_TRAIN = "Train cancelled/disappeared from board"
+    UNKNOWN = "Not sure, just delayed"
 
 class UserReportResponse(BaseModel):
     id: int
@@ -130,6 +146,17 @@ class UserReportResponse(BaseModel):
     observed_experience: str
     report_date: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "id": 1042,
+                "line_name": "Central",
+                "delay_minutes": 25,
+                "observed_experience": "Train moving at a crawling pace",
+                "report_date": "2026-03-09 17:25:00"
+            }]
+        }
+    }
 
 class UserMetrics(BaseModel):
     total_reports: int
@@ -137,6 +164,16 @@ class UserMetrics(BaseModel):
     peak_delay: int
     buffer_time_index: float
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "total_reports": 14,
+                "crowd_consensus_delay": 22.5,
+                "peak_delay": 45,
+                "buffer_time_index": 22.5
+            }]
+        }
+    }
 
 class TflStatusResponse(BaseModel):
     id: int
@@ -145,6 +182,17 @@ class TflStatusResponse(BaseModel):
     reason: str | None
     timestamp: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "id": 500,
+                "line_name": "Central",
+                "status": "Severe Delays",
+                "reason": "Signal failure at Stratford",
+                "timestamp": "2026-03-09 17:20:00"
+            }]
+        }
+    }
 
 class DiscrepancyResponse(BaseModel):
     line_name: str
@@ -154,6 +202,18 @@ class DiscrepancyResponse(BaseModel):
     peak_delay_minutes: int
     confidence_level: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "line_name": "Central",
+                "official_status": "Good Service",
+                "corroborating_reports": 8,
+                "crowd_consensus_minutes": 22.5,
+                "peak_delay_minutes": 45,
+                "confidence_level": "High (Confirmed by crowd)"
+            }]
+        }
+    }
 
 class ReliabilityScore(BaseModel):
     line_name: str
@@ -162,6 +222,22 @@ class ReliabilityScore(BaseModel):
     assessment: str
     user_metrics: UserMetrics
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "line_name": "Central",
+                "official_status": "Minor Delays",
+                "reliability_percentage": 55.0,
+                "assessment": "Degraded (High Commuter Risk)",
+                "user_metrics": {
+                    "total_reports": 14,
+                    "crowd_consensus_delay": 22.5,
+                    "peak_delay": 45,
+                    "buffer_time_index": 22.5
+                }
+            }]
+        }
+    }
 
 class DelayPattern(BaseModel):
     observed_experience: str
@@ -169,27 +245,48 @@ class DelayPattern(BaseModel):
     average_delay_minutes: float
     peak_delay_minutes: int
 
-
-class ObservedExperience(str, Enum):
-    stuck_in_tunnel = "Stuck in tunnel"
-    crawling_pace = "Train moving at a crawling pace"
-    platform_crowded = "Platform dangerously crowded"
-    ghost_train = "Train cancelled/disappeared from board"
-    unknown = "Not sure, just delayed"
-
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "observed_experience": "Stuck in tunnel",
+                "incident_count": 45,
+                "average_delay_minutes": 28.5,
+                "peak_delay_minutes": 60
+            }]
+        }
+    }
 
 class TemporalSummary(BaseModel):
     day_of_week: str
     hour_of_day: str
     total_incidents: int
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "day_of_week": "Monday",
+                "hour_of_day": "17",
+                "total_incidents": 120
+            }]
+        }
+    }
 
 class LineUptime(BaseModel):
     line_name: str
     uptime_percentage: float
-    official_disruption_snapshots: int  # Replaces the fragile minutes calculation
+    official_disruption_snapshots: int
     current_status: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "line_name": "Victoria",
+                "uptime_percentage": 98.5,
+                "official_disruption_snapshots": 3,
+                "current_status": "Good Service"
+            }]
+        }
+    }
 
 class DelayVelocity(BaseModel):
     line_name: str
@@ -198,6 +295,17 @@ class DelayVelocity(BaseModel):
     trend: str
     velocity_assessment: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "line_name": "Jubilee",
+                "current_hour_delay_minutes": 45,
+                "previous_hour_delay_minutes": 15,
+                "trend": "+30.0 minutes",
+                "velocity_assessment": "Accelerating (Peak severity currently at 45 mins)"
+            }]
+        }
+    }
 
 class UserReportCreateResponse(BaseModel):
     id: int
@@ -205,16 +313,35 @@ class UserReportCreateResponse(BaseModel):
     delay_minutes: int
     observed_experience: ObservedExperience
     report_date: str
-    edit_token: str  # The secret token given to the creator
+    edit_token: str
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "id": 1042,
+                "line_name": "Central",
+                "delay_minutes": 25,
+                "observed_experience": "Train moving at a crawling pace",
+                "report_date": "2026-03-09 17:25:00",
+                "edit_token": "550e8400-e29b-41d4-a716-446655440000"
+            }]
+        }
+    }
 
 class UserReportCreate(BaseModel):
     line_name: TfLLine
-    # Enforce realistic math right at the front door
-    delay_minutes: int = Field(
-        ..., gt=0, le=300, description="Delay in minutes (1 to 300)"
-    )
+    delay_minutes: int = Field(..., gt=0, le=300, description="Delay in minutes (1 to 300)")
     observed_experience: ObservedExperience
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "line_name": "Central",
+                "delay_minutes": 25,
+                "observed_experience": "Train moving at a crawling pace"
+            }]
+        }
+    }
 
 
 # --- DATABASE HELPER ---
