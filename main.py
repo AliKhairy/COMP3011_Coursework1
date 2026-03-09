@@ -109,14 +109,17 @@ class SystemHealth(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "api_uptime_seconds": 3402.5,
-                "database_status": "connected",
-                "background_worker_status": "healthy",
-                "last_tfl_sync": "2026-03-09 17:30:00"
-            }]
+            "examples": [
+                {
+                    "api_uptime_seconds": 3402.5,
+                    "database_status": "connected",
+                    "background_worker_status": "healthy",
+                    "last_tfl_sync": "2026-03-09 17:30:00",
+                }
+            ]
         }
     }
+
 
 class TfLLine(str, Enum):
     BAKERLOO = "Bakerloo"
@@ -132,12 +135,14 @@ class TfLLine(str, Enum):
     VICTORIA = "Victoria"
     WATERLOO = "Waterloo & City"
 
+
 class ObservedExperience(str, Enum):
     STUCK_IN_TUNNEL = "Stuck in tunnel"
     CRAWLING_PACE = "Train moving at a crawling pace"
     PLATFORM_CROWDED = "Platform dangerously crowded"
     GHOST_TRAIN = "Train cancelled/disappeared from board"
     UNKNOWN = "Not sure, just delayed"
+
 
 class UserReportResponse(BaseModel):
     id: int
@@ -148,15 +153,18 @@ class UserReportResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "id": 1042,
-                "line_name": "Central",
-                "delay_minutes": 25,
-                "observed_experience": "Train moving at a crawling pace",
-                "report_date": "2026-03-09 17:25:00"
-            }]
+            "examples": [
+                {
+                    "id": 1042,
+                    "line_name": "Central",
+                    "delay_minutes": 25,
+                    "observed_experience": "Train moving at a crawling pace",
+                    "report_date": "2026-03-09 17:25:00",
+                }
+            ]
         }
     }
+
 
 class UserMetrics(BaseModel):
     total_reports: int
@@ -166,14 +174,17 @@ class UserMetrics(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "total_reports": 14,
-                "crowd_consensus_delay": 22.5,
-                "peak_delay": 45,
-                "buffer_time_index": 22.5
-            }]
+            "examples": [
+                {
+                    "total_reports": 14,
+                    "crowd_consensus_delay": 22.5,
+                    "peak_delay": 45,
+                    "buffer_time_index": 22.5,
+                }
+            ]
         }
     }
+
 
 class TflStatusResponse(BaseModel):
     id: int
@@ -184,15 +195,18 @@ class TflStatusResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "id": 500,
-                "line_name": "Central",
-                "status": "Severe Delays",
-                "reason": "Signal failure at Stratford",
-                "timestamp": "2026-03-09 17:20:00"
-            }]
+            "examples": [
+                {
+                    "id": 500,
+                    "line_name": "Central",
+                    "status": "Severe Delays",
+                    "reason": "Signal failure at Stratford",
+                    "timestamp": "2026-03-09 17:20:00",
+                }
+            ]
         }
     }
+
 
 class DiscrepancyResponse(BaseModel):
     line_name: str
@@ -204,16 +218,19 @@ class DiscrepancyResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "line_name": "Central",
-                "official_status": "Good Service",
-                "corroborating_reports": 8,
-                "crowd_consensus_minutes": 22.5,
-                "peak_delay_minutes": 45,
-                "confidence_level": "High (Confirmed by crowd)"
-            }]
+            "examples": [
+                {
+                    "line_name": "Central",
+                    "official_status": "Good Service",
+                    "corroborating_reports": 8,
+                    "crowd_consensus_minutes": 22.5,
+                    "peak_delay_minutes": 45,
+                    "confidence_level": "High (Confirmed by crowd)",
+                }
+            ]
         }
     }
+
 
 class ReliabilityScore(BaseModel):
     line_name: str
@@ -224,20 +241,23 @@ class ReliabilityScore(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "line_name": "Central",
-                "official_status": "Minor Delays",
-                "reliability_percentage": 55.0,
-                "assessment": "Degraded (High Commuter Risk)",
-                "user_metrics": {
-                    "total_reports": 14,
-                    "crowd_consensus_delay": 22.5,
-                    "peak_delay": 45,
-                    "buffer_time_index": 22.5
+            "examples": [
+                {
+                    "line_name": "Central",
+                    "official_status": "Minor Delays",
+                    "reliability_percentage": 55.0,
+                    "assessment": "Degraded (High Commuter Risk)",
+                    "user_metrics": {
+                        "total_reports": 14,
+                        "crowd_consensus_delay": 22.5,
+                        "peak_delay": 45,
+                        "buffer_time_index": 22.5,
+                    },
                 }
-            }]
+            ]
         }
     }
+
 
 class DelayPattern(BaseModel):
     observed_experience: str
@@ -247,14 +267,17 @@ class DelayPattern(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "observed_experience": "Stuck in tunnel",
-                "incident_count": 45,
-                "average_delay_minutes": 28.5,
-                "peak_delay_minutes": 60
-            }]
+            "examples": [
+                {
+                    "observed_experience": "Stuck in tunnel",
+                    "incident_count": 45,
+                    "average_delay_minutes": 28.5,
+                    "peak_delay_minutes": 60,
+                }
+            ]
         }
     }
+
 
 class TemporalSummary(BaseModel):
     day_of_week: str
@@ -263,13 +286,12 @@ class TemporalSummary(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "day_of_week": "Monday",
-                "hour_of_day": "17",
-                "total_incidents": 120
-            }]
+            "examples": [
+                {"day_of_week": "Monday", "hour_of_day": "17", "total_incidents": 120}
+            ]
         }
     }
+
 
 class LineUptime(BaseModel):
     line_name: str
@@ -279,14 +301,17 @@ class LineUptime(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "line_name": "Victoria",
-                "uptime_percentage": 98.5,
-                "official_disruption_snapshots": 3,
-                "current_status": "Good Service"
-            }]
+            "examples": [
+                {
+                    "line_name": "Victoria",
+                    "uptime_percentage": 98.5,
+                    "official_disruption_snapshots": 3,
+                    "current_status": "Good Service",
+                }
+            ]
         }
     }
+
 
 class DelayVelocity(BaseModel):
     line_name: str
@@ -297,15 +322,18 @@ class DelayVelocity(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "line_name": "Jubilee",
-                "current_hour_delay_minutes": 45,
-                "previous_hour_delay_minutes": 15,
-                "trend": "+30.0 minutes",
-                "velocity_assessment": "Accelerating (Peak severity currently at 45 mins)"
-            }]
+            "examples": [
+                {
+                    "line_name": "Jubilee",
+                    "current_hour_delay_minutes": 45,
+                    "previous_hour_delay_minutes": 15,
+                    "trend": "+30.0 minutes",
+                    "velocity_assessment": "Accelerating (Peak severity currently at 45 mins)",
+                }
+            ]
         }
     }
+
 
 class UserReportCreateResponse(BaseModel):
     id: int
@@ -317,29 +345,36 @@ class UserReportCreateResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "id": 1042,
-                "line_name": "Central",
-                "delay_minutes": 25,
-                "observed_experience": "Train moving at a crawling pace",
-                "report_date": "2026-03-09 17:25:00",
-                "edit_token": "550e8400-e29b-41d4-a716-446655440000"
-            }]
+            "examples": [
+                {
+                    "id": 1042,
+                    "line_name": "Central",
+                    "delay_minutes": 25,
+                    "observed_experience": "Train moving at a crawling pace",
+                    "report_date": "2026-03-09 17:25:00",
+                    "edit_token": "550e8400-e29b-41d4-a716-446655440000",
+                }
+            ]
         }
     }
 
+
 class UserReportCreate(BaseModel):
     line_name: TfLLine
-    delay_minutes: int = Field(..., gt=0, le=300, description="Delay in minutes (1 to 300)")
+    delay_minutes: int = Field(
+        ..., gt=0, le=300, description="Delay in minutes (1 to 300)"
+    )
     observed_experience: ObservedExperience
 
     model_config = {
         "json_schema_extra": {
-            "examples": [{
-                "line_name": "Central",
-                "delay_minutes": 25,
-                "observed_experience": "Train moving at a crawling pace"
-            }]
+            "examples": [
+                {
+                    "line_name": "Central",
+                    "delay_minutes": 25,
+                    "observed_experience": "Train moving at a crawling pace",
+                }
+            ]
         }
     }
 
@@ -366,11 +401,41 @@ def root():
 # 1. CREATE (Secured with Rate Limiting and Dynamic Anomaly Detection)
 
 
+# 1. CREATE (Secured with Rate Limiting and Dynamic Anomaly Detection)
 @app.post(
     "/reports",
     response_model=UserReportCreateResponse,
     status_code=201,
     dependencies=[Depends(verify_rate_limit)],
+    responses={
+        422: {
+            "description": "Validation Error (Pagination Limits Exceeded)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "less_than_equal",
+                                "loc": ["query", "limit"],
+                                "msg": "Input should be less than or equal to 100",
+                                "input": "5000"
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        429: {
+            "description": "Rate Limit Exceeded",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Rate limit exceeded. To ensure data integrity, you are limited to 3 reports per hour."
+                    }
+                }
+            },
+        },
+    },
 )
 def create_report(report: UserReportCreate):
     # Notice we don't need the 'if delay_minutes > 300' check here anymore.
@@ -486,7 +551,45 @@ def get_reports(
 # 3. UPDATE (Secured with Edit Token)
 
 
-@app.put("/reports/{report_id}", response_model=UserReportResponse)
+@app.put(
+    "/reports/{report_id}", 
+    response_model=UserReportResponse,
+    responses={
+        403: {
+            "description": "Forbidden (Invalid Token)",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Forbidden: Invalid edit token. You can only edit your own reports."}
+                }
+            }
+        },
+        404: {
+            "description": "Report Not Found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Report not found."}
+                }
+            }
+        },
+        422: {
+            "description": "Validation Error (Invalid ID Type)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "int_parsing",
+                                "loc": ["path", "report_id"],
+                                "msg": "Input should be a valid integer, unable to parse string as an integer",
+                                "input": "abc"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+)
 def update_report(
     report_id: int,
     report: UserReportCreate,
@@ -786,7 +889,27 @@ def get_network_uptime():
 # 8. SYSTEM HEALTH CHECK (Deep Diagnostic & Uptime)
 
 
-@app.get("/health", response_model=SystemHealth)
+@app.get(
+    "/health",
+    response_model=SystemHealth,
+    responses={
+        503: {
+            "description": "System Degraded",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {
+                            "api_uptime_seconds": 3402.5,
+                            "database_status": "connected",
+                            "background_worker_status": "degraded (stale data: 850s old)",
+                            "last_tfl_sync": "2026-03-09 17:15:00",
+                        }
+                    }
+                }
+            },
+        }
+    },
+)
 def get_health_check():
     # Calculate exact API uptime dynamically
     current_uptime = round(time.time() - API_START_TIME, 2)
@@ -844,7 +967,29 @@ def get_health_check():
 # 9. DELAY VELOCITY (Trending Analysis - UTC and Severity Based)
 
 
-@app.get("/analytics/velocity/{line_name}", response_model=DelayVelocity)
+@app.get(
+    "/analytics/velocity/{line_name}",
+    response_model=DelayVelocity,
+    responses={
+        422: {
+            "description": "Validation Error (Invalid Line Name)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "enum",
+                                "loc": ["path", "line_name"],
+                                "msg": "Input should be 'Bakerloo', 'Central', etc.",
+                                "input": "Hogwarts Express",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    },
+)
 def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
@@ -916,7 +1061,29 @@ def get_delay_velocity(line_name: TfLLine):  # <-- Upgraded to strict Enum
 # 1. ENHANCED Route-Level Reliability Scores (Strict Assessment)
 
 
-@app.get("/analytics/reliability/{line_name}", response_model=ReliabilityScore)
+@app.get(
+    "/analytics/reliability/{line_name}",
+    response_model=ReliabilityScore,
+    responses={
+        422: {
+            "description": "Validation Error (Invalid Line Name)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "enum",
+                                "loc": ["path", "line_name"],
+                                "msg": "Input should be 'Bakerloo', 'Central', etc.",
+                                "input": "Hogwarts Express",
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+    },
+)
 def get_reliability_score(line_name: TfLLine):  # <-- Enforce Enum here
     with closing(get_db_connection()) as conn:
         cursor = conn.cursor()
