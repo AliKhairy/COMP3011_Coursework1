@@ -5,7 +5,7 @@
 ---
 
 ## API Documentation
-Full endpoint specifications, request/response schemas, and error codes are available in the accompanying repository file: `api_documentation.pdf`. Alternatively, boot the local server and navigate to `/docs` for the interactive FastAPI Swagger UI.
+Full endpoint specifications, request/response schemas, and error codes are available in the accompanying repository file: `London Underground Reliability API - ReDoc.pdf`. Alternatively, boot the local server and navigate to `/docs` for the interactive FastAPI Swagger UI.
 
 ---
 
@@ -38,11 +38,15 @@ Follow these steps to deploy the API locally. This project uses strict versionin
 ```bash
 pip install -r requirements.txt
 ```
-2. Boot the Uvicorn server:
+2. [Optional] Seed the database:
 ```bash
-uvicorn main:app --reload
+python seed_database.py
 ```
-3. The background worker will automatically initialize and fetch the first snapshot of TfL data. Access the interactive API documentation at ```http://127.0.0.1:8000/docs```.
+3. Boot the Uvicorn server:
+```bash
+python -m uvicorn main:app --reload
+```
+4. The background worker will automatically initialize and fetch the first snapshot of TfL data. Access the interactive API documentation at ```http://127.0.0.1:8000/docs```.
 
 ## Automated Testing
 To verify boundary limits, anomaly detection, and edge cases, execute the Pytest suite. Testing dependencies are already included in the requirements file.
