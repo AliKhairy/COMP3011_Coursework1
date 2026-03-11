@@ -38,15 +38,19 @@ Follow these steps to deploy the API locally. This project uses strict versionin
 ```bash
 pip install -r requirements.txt
 ```
-2. [Optional] Seed the database:
+2. Setup the database:
+```bash
+python setup_database.py
+```
+3. [Optional] Seed the database:
 ```bash
 python seed_database.py
 ```
-3. Boot the Uvicorn server:
+4. Boot the Uvicorn server:
 ```bash
 python -m uvicorn main:app --reload
 ```
-4. The background worker will automatically initialize and fetch the first snapshot of TfL data. Access the interactive API documentation at ```http://127.0.0.1:8000/docs```.
+5. The background worker will automatically initialize and fetch the first snapshot of TfL data. Access the interactive API documentation at ```http://127.0.0.1:8000/docs```.
 
 ## Automated Testing
 To verify boundary limits, anomaly detection, and edge cases, execute the Pytest suite. Testing dependencies are already included in the requirements file.
